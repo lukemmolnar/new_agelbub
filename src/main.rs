@@ -1,7 +1,4 @@
-use serenity::async_trait;
-use serenity::model::channel::Message;
-use serenity::model::gateway::Ready;
-use serenity::prelude::*;
+use poise::serenity_prelude as serenity;
 use std::env;
 use tracing::{error, info};
 use chrono::Utc;
@@ -13,256 +10,223 @@ mod crypto;
 use database::{Database, User, Transaction};
 use crypto::CryptoManager;
 
-struct Handler {
+type Error = Box<dyn std::error::Error + Send + Sync>;
+type Context<'a> = poise::Context<'a, Data, Error>;
+
+pub struct Data {
     database: Database,
     crypto: CryptoManager,
 }
 
-impl Handler {
-    fn new(database: Database, crypto: CryptoManager) -> Self {
-        Self { database, crypto }
-    }
-}
-
-#[async_trait]
-impl EventHandler for Handler {
-    async fn message(&self, ctx: Context, msg: Message) {
-        // Ignore bot messages
-        if msg.author.bot {
-            return;
-        }
-
-        // Basic test command
-        if msg.content == "!test" {
-            if let Err(why) = msg.channel_id.say(&ctx.http, "Bot is working").await {
-                error!("Error sending message: {why}");
+#[poise::command(slash_command)]
+async fn register(
+    ctx: Context<'_>,
+    #[description = "User to register (admin only)"] user: Option<serenity::User>,
+) -> Result<(), Error> {
+    let data = &ctx.data();
+    let (target_user, is_registering_other) = match user {
+        Some(mentioned_user) => {
+            // TODO: Replace with actual admin check
+            let is_admin = true;
+            
+            if !is_admin {
+                ctx.say("You don't have permission to register other users.").await?;
+                return Ok(());
             }
+            (mentioned_user, true)
         }
+        None => (ctx.author().clone(), false),
+    };
 
-        // Ping command
-        if msg.content == "!ping" {
-            if let Err(why) = msg.channel_id.say(&ctx.http, "Pong").await {
-                error!("Error sending message: {why}");
-            }
-        }
+    let user_id = target_user.id.to_string();
+    let username = target_user.name.clone();
 
-
-
-        // Register command
-        if msg.content == "!register" || msg.content.starts_with("!register ") {
-            let (user_id, username, is_registering_other) = if let Some(mentioned_user) = msg.mentions.first() {
-                // Check if user has admin permissions (you'll need to implement this check)
-                // For now, this is a placeholder - replace with your actual admin check
-                let is_admin = true; // TODO: Implement actual admin check
-                
-                if !is_admin {
-                    if let Err(why) = msg.channel_id.say(&ctx.http, "You don't have permission to register other users.").await {
-                        error!("Error sending message: {why}");
-                    }
-                    return;
-                }
-                
-                (mentioned_user.id.to_string(), mentioned_user.name.clone(), true)
+    match data.database.get_user(&user_id).await {
+        Ok(Some(_)) => {
+            let response = if is_registering_other {
+                format!("{} is already registered", username)
             } else {
-                (msg.author.id.to_string(), msg.author.name.clone(), false)
+                "You're already registered!".to_string()
             };
-
-            match self.database.get_user(&user_id).await {
-                Ok(Some(_)) => {
-                    let response = if is_registering_other {
-                        format!("{} is already registered", username)
-                    } else {
-                        "You're already registered!".to_string()
-                    };
-                    if let Err(why) = msg.channel_id.say(&ctx.http, response).await {
-                        error!("Error sending message: {why}");
-                    }
-                }
-                Ok(None) => {
-                    // Generate new keypair for user
-                    match self.crypto.generate_keypair() {
-                        Ok((public_key, private_key)) => {
-                            // Encrypt private key
-                            match self.crypto.encrypt_private_key(&private_key, &user_id) {
-                                Ok(encrypted_private_key) => {
-                                    let user = User {
-                                        discord_id: user_id.clone(),
-                                        username: username.clone(),
-                                        public_key,
-                                        encrypted_private_key,
-                                        nonce: 0,
-                                        created_at: Utc::now(),
-                                        updated_at: Utc::now(),
-                                    };
-
-                                    match self.database.create_user(&user).await {
-                                        Ok(()) => {
-                                            let response = format!(
-                                                "Registration successful. bub boils the seed"
-                                            );
-                                            if let Err(why) = msg.channel_id.say(&ctx.http, response).await {
-                                                error!("Error sending message: {why}");
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!("Database error creating user: {}", e);
-                                            if let Err(why) = msg.channel_id.say(&ctx.http, "Registration failed. Please try again.").await {
-                                                error!("Error sending message: {why}");
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("Error encrypting private key: {}", e);
-                                    if let Err(why) = msg.channel_id.say(&ctx.http, "Registration failed. Please try again.").await {
-                                        error!("Error sending message: {why}");
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Error generating keypair: {}", e);
-                            if let Err(why) = msg.channel_id.say(&ctx.http, "Registration failed. Please try again.").await {
-                                error!("Error sending message: {why}");
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("Database error checking user: {}", e);
-                    if let Err(why) = msg.channel_id.say(&ctx.http, "Registration failed. Please try again.").await {
-                        error!("Error sending message: {why}");
-                    }
-                }
-            }
+            ctx.say(response).await?;
         }
-
-        // Check balance
-        if msg.content == "!balance" {
-            let user_id = msg.author.id.to_string();
-
-            match self.database.get_user(&user_id).await {
-                Ok(Some(_)) => {
-                    match self.database.get_balance(&user_id).await {
-                        Ok(balance) => {
-                            let response = format!("Your balance: {} coins", balance);
-                            if let Err(why) = msg.channel_id.say(&ctx.http, response).await {
-                                error!("Error sending message: {why}");
-                            }
-                        }
-                        Err(e) => {
-                            error!("Error getting balance: {}", e);
-                            if let Err(why) = msg.channel_id.say(&ctx.http, "Error retrieving balance.").await {
-                                error!("Error sending message: {why}");
-                            }
-                        }
-                    }
-                }
-                Ok(None) => {
-                    if let Err(why) = msg.channel_id.say(&ctx.http, "You're not registered! Use `!register` first.").await {
-                        error!("Error sending message: {why}");
-                    }
-                }
-                Err(e) => {
-                    error!("Database error: {}", e);
-                    if let Err(why) = msg.channel_id.say(&ctx.http, "Database error occurred.").await {
-                        error!("Error sending message: {why}");
-                    }
-                }
-            }
-        }
-
-        // Admin command to give coins (for testing)
-        if msg.content.starts_with("!give ") {
-            // Simple admin check - you might want to make this more robust
-            let parts: Vec<&str> = msg.content.split_whitespace().collect();
-            if parts.len() == 3 {
-                if let (Ok(amount), Some(mentioned_user)) = (parts[2].parse::<i64>(), msg.mentions.first()) {
-                    let to_user_id = mentioned_user.id.to_string();
-                    let from_user_id = "SYSTEM".to_string();
-
-                    // Check if target user is registered
-                    match self.database.get_user(&to_user_id).await {
-                        Ok(Some(_)) => {
-                            // Create a system mint transaction
-                            let transaction = Transaction {
-                                id: Uuid::new_v4().to_string(),
-                                from_user: from_user_id,
-                                to_user: to_user_id.clone(),
-                                amount,
-                                transaction_type: "mint".to_string(),
-                                message: Some(format!("Admin grant by {}", msg.author.name)),
+        Ok(None) => {
+            // Generate new keypair for user
+            match data.crypto.generate_keypair() {
+                Ok((public_key, private_key)) => {
+                    // Encrypt private key
+                    match data.crypto.encrypt_private_key(&private_key, &user_id) {
+                        Ok(encrypted_private_key) => {
+                            let user = User {
+                                discord_id: user_id.clone(),
+                                username: username.clone(),
+                                public_key,
+                                encrypted_private_key,
                                 nonce: 0,
-                                signature: "system".to_string(), // System transactions don't need real signatures
-                                timestamp_unix: Utc::now().timestamp(),
                                 created_at: Utc::now(),
+                                updated_at: Utc::now(),
                             };
 
-                            match self.database.add_transaction(&transaction).await {
+                            match data.database.create_user(&user).await {
                                 Ok(()) => {
-                                    // Update balance
-                                    let current_balance = self.database.get_balance(&to_user_id).await.unwrap_or(0);
-                                    let new_balance = current_balance + amount;
-
-                                    match self.database.update_balance(&to_user_id, new_balance).await {
-                                        Ok(()) => {
-                                            let response = format!("Gave {} coins to {}. New balance: {}", amount, mentioned_user.name, new_balance);
-                                            if let Err(why) = msg.channel_id.say(&ctx.http, response).await {
-                                                error!("Error sending message: {why}");
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!("Error updating balance: {}", e);
-                                        }
-                                    }
+                                    let response = if is_registering_other {
+                                        format!(
+                                            "registered {} successfully. bub boils the seed\n\
+                                            Starting balance: 0 coins.\n\
+                                            {} can now use `/balance` and receive coins.",
+                                            username, username
+                                        )
+                                    } else {
+                                        "Registration successful. bub boils the seed".to_string()
+                                    };
+                                    ctx.say(response).await?;
                                 }
                                 Err(e) => {
-                                    error!("Error adding transaction: {}", e);
-                                    if let Err(why) = msg.channel_id.say(&ctx.http, "Error processing transaction.").await {
-                                        error!("Error sending message: {why}");
-                                    }
+                                    error!("Database error creating user: {}", e);
+                                    ctx.say("Registration failed. Please try again.").await?;
                                 }
-                            }
-                        }
-                        Ok(None) => {
-                            if let Err(why) = msg.channel_id.say(&ctx.http, "Target user is not registered!").await {
-                                error!("Error sending message: {why}");
                             }
                         }
                         Err(e) => {
-                            error!("Database error: {}", e);
+                            error!("Error encrypting private key: {}", e);
+                            ctx.say("Registration failed. Please try again.").await?;
                         }
                     }
-                } else {
-                    if let Err(why) = msg.channel_id.say(&ctx.http, "Usage: `!give @user amount`").await {
-                        error!("Error sending message: {why}");
-                    }
+                }
+                Err(e) => {
+                    error!("Error generating keypair: {}", e);
+                    ctx.say("Registration failed. Please try again.").await?;
                 }
             }
         }
-
-        // Bot info command
-        if msg.content == "!info" {
-            let response = format!(
-                "**Available commands:**\n\
-                • `!test` - Test if bot is working\n\
-                • `!ping` - Ping pong!\n\
-                • `!register` - Register for the currency system\n\
-                • `!register @user` - Register another user (admin)\n\
-                • `!balance` - Check your coin balance\n\
-                • `!give @user amount` - Give coins to a user (admin)\n\
-                • `!info` - Show this message"
-            );
-
-            if let Err(why) = msg.channel_id.say(&ctx.http, response).await {
-                error!("Error sending message: {why}");
-            }
+        Err(e) => {
+            error!("Database error checking user: {}", e);
+            ctx.say("Registration failed. Please try again.").await?;
         }
     }
 
-    async fn ready(&self, _: Context, ready: Ready) {
-        info!("{} is connected and ready!", ready.user.name);
+    Ok(())
+}
+
+#[poise::command(slash_command)]
+async fn balance(ctx: Context<'_>) -> Result<(), Error> {
+    let data = &ctx.data();
+    let user_id = ctx.author().id.to_string();
+
+    match data.database.get_user(&user_id).await {
+        Ok(Some(_)) => {
+            match data.database.get_balance(&user_id).await {
+                Ok(balance) => {
+                    let response = format!("Your balance: {} coins", balance);
+                    ctx.say(response).await?;
+                }
+                Err(e) => {
+                    error!("Error getting balance: {}", e);
+                    ctx.say("Error retrieving balance.").await?;
+                }
+            }
+        }
+        Ok(None) => {
+            ctx.say("You're not registered! Use `/register` first.").await?;
+        }
+        Err(e) => {
+            error!("Database error: {}", e);
+            ctx.say("Database error occurred.").await?;
+        }
     }
+
+    Ok(())
+}
+
+#[poise::command(slash_command)]
+async fn give(
+    ctx: Context<'_>,
+    #[description = "User to give coins to"] user: serenity::User,
+    #[description = "Amount of coins to give"] amount: i64,
+) -> Result<(), Error> {
+    let data = &ctx.data();
+    
+    // TODO: Replace with actual admin check
+    let is_admin = true;
+    
+    if !is_admin {
+        ctx.say("You don't have permission to give coins.").await?;
+        return Ok(());
+    }
+
+    if amount <= 0 {
+        ctx.say("Amount must be positive.").await?;
+        return Ok(());
+    }
+
+    let to_user_id = user.id.to_string();
+    let from_user_id = "SYSTEM".to_string();
+
+    // Check if target user is registered
+    match data.database.get_user(&to_user_id).await {
+        Ok(Some(_)) => {
+            // Create a system mint transaction
+            let transaction = Transaction {
+                id: Uuid::new_v4().to_string(),
+                from_user: from_user_id,
+                to_user: to_user_id.clone(),
+                amount,
+                transaction_type: "mint".to_string(),
+                message: Some(format!("Admin grant by {}", ctx.author().name)),
+                nonce: 0,
+                signature: "system".to_string(),
+                timestamp_unix: Utc::now().timestamp(),
+                created_at: Utc::now(),
+            };
+
+            match data.database.add_transaction(&transaction).await {
+                Ok(()) => {
+                    // Update balance
+                    let current_balance = data.database.get_balance(&to_user_id).await.unwrap_or(0);
+                    let new_balance = current_balance + amount;
+
+                    match data.database.update_balance(&to_user_id, new_balance).await {
+                        Ok(()) => {
+                            let response = format!("Gave {} coins to {}. New balance: {}", amount, user.name, new_balance);
+                            ctx.say(response).await?;
+                        }
+                        Err(e) => {
+                            error!("Error updating balance: {}", e);
+                            ctx.say("Error updating balance.").await?;
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Error adding transaction: {}", e);
+                    ctx.say("Error processing transaction.").await?;
+                }
+            }
+        }
+        Ok(None) => {
+            ctx.say("Target user is not registered!").await?;
+        }
+        Err(e) => {
+            error!("Database error: {}", e);
+            ctx.say("Database error occurred.").await?;
+        }
+    }
+
+    Ok(())
+}
+
+#[poise::command(slash_command)]
+async fn info(ctx: Context<'_>) -> Result<(), Error> {
+    let response = format!(
+        "
+        • `/register`\n\
+        • `/register @user` - Register another user (admin)\n\
+        • `/balance` - Check your Slumcoin balance\n\
+        • `/give @user amount` - Give Slumcoins to a user (admin)\n\
+        • `/info` or `!info` - Show this message\n\
+        "
+    );
+    ctx.say(response).await?;
+    Ok(())
 }
 
 #[tokio::main]
@@ -293,21 +257,30 @@ async fn main() {
     let crypto = CryptoManager::new(&crypto_key)
         .expect("Failed to initialize crypto manager");
 
-    // Set gateway intents - we need MESSAGE_CONTENT to read message content
-    let intents = GatewayIntents::GUILD_MESSAGES
-        | GatewayIntents::DIRECT_MESSAGES
-        | GatewayIntents::MESSAGE_CONTENT;
+    let framework = poise::Framework::builder()
+        .options(poise::FrameworkOptions {
+            commands: vec![register(), balance(), give(), info()],
+            prefix_options: poise::PrefixFrameworkOptions {
+                prefix: Some("!".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .setup(|ctx, _ready, framework| {
+            Box::pin(async move {
+                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                Ok(Data { database, crypto })
+            })
+        })
+        .build();
 
-    // Create a new instance of the Client
-    let mut client = Client::builder(&token, intents)
-        .event_handler(Handler::new(database, crypto))
-        .await
-        .expect("Error creating client");
+    let intents = serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
+
+    let client = serenity::ClientBuilder::new(token, intents)
+        .framework(framework)
+        .await;
 
     info!("Starting bot...");
 
-    // Start the client
-    if let Err(why) = client.start().await {
-        error!("Client error: {why}");
-    }
+    client.unwrap().start().await.unwrap();
 }

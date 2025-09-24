@@ -330,4 +330,39 @@ impl Database {
         info!("Balance verification complete");
         Ok(())
     }
+
+    // Get all users with their balances for leaderboard
+    pub async fn get_all_users_with_balances(&self, limit: Option<u32>) -> Result<Vec<(String, i64)>, sqlx::Error> {
+        let query = match limit {
+            Some(limit_val) => format!(
+                r#"
+                SELECT u.username, COALESCE(b.balance, 0) as balance
+                FROM users u
+                LEFT JOIN balances b ON u.discord_id = b.discord_id
+                ORDER BY COALESCE(b.balance, 0) DESC
+                LIMIT {}
+                "#,
+                limit_val
+            ),
+            None => r#"
+                SELECT u.username, COALESCE(b.balance, 0) as balance
+                FROM users u
+                LEFT JOIN balances b ON u.discord_id = b.discord_id
+                ORDER BY COALESCE(b.balance, 0) DESC
+                "#.to_string(),
+        };
+
+        let rows = sqlx::query(&query)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut users_with_balances = Vec::new();
+        for row in rows {
+            let username: String = row.get("username");
+            let balance: i64 = row.get("balance");
+            users_with_balances.push((username, balance));
+        }
+
+        Ok(users_with_balances)
+    }
 }

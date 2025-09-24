@@ -91,7 +91,7 @@ async fn register(
         Some(mentioned_user) => {
             // Check if user has permission to register others
             if !can_register_others(ctx).await? {
-                ctx.say("❌ You don't have permission to register other users.\n\
+                ctx.say("You don't have permission to register other users.\n\
                         **Required:** Bot owner, Administrator permission, or 'Currency Admin' role").await?;
                 return Ok(());
             }
@@ -213,12 +213,10 @@ async fn give(
         let admin_role_name = env::var("ADMIN_ROLE_NAME")
             .unwrap_or_else(|_| "Currency Admin".to_string());
         let response = format!(
-            "❌ **Access Denied**\n\
+            "
             You don't have permission to use this command.\n\
             \n\
             **Required permissions (any of the following):**\n\
-            • Bot application owner\n\
-            • Discord Administrator permission\n\
             • '{}' role",
             admin_role_name
         );
@@ -289,10 +287,44 @@ async fn info(ctx: Context<'_>) -> Result<(), Error> {
         • `/register @user` - Register another user (admin)\n\
         • `/balance` - Check your Slumcoin balance\n\
         • `/give @user amount` - Give Slumcoins to a user (admin)\n\
-        • `/info` or `!info` - Show this message\n\
+        • `/baltop` - Show Slumcoin leaderboard\n\
+        • `/info` Show this message\n\
         "
     );
     ctx.say(response).await?;
+    Ok(())
+}
+
+#[poise::command(slash_command)]
+async fn baltop(ctx: Context<'_>) -> Result<(), Error> {
+    let data = &ctx.data();
+
+    match data.database.get_all_users_with_balances(None).await {
+        Ok(users_with_balances) => {
+            if users_with_balances.is_empty() {
+                ctx.say("No registered users found!").await?;
+                return Ok(());
+            }
+
+            let mut response = "Slumbank Leaderboard\n".to_string();
+            
+            for (rank, (username, balance)) in users_with_balances.iter().enumerate() {
+                response.push_str(&format!(
+                    "**{}. {} : ``{}``**\n",
+                    rank + 1,
+                    username,
+                    balance
+                ));
+            }
+
+            ctx.say(response).await?;
+        }
+        Err(e) => {
+            error!("Error getting leaderboard: {}", e);
+            ctx.say("Error retrieving leaderboard. Please try again.").await?;
+        }
+    }
+
     Ok(())
 }
 
@@ -326,7 +358,7 @@ async fn main() {
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![test(), ping(), register(), balance(), give(), info()],
+            commands: vec![test(), ping(), register(), balance(), give(), info(), baltop()],
             prefix_options: poise::PrefixFrameworkOptions {
                 prefix: Some("!".into()),
                 ..Default::default()

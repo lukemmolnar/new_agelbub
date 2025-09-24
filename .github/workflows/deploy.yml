@@ -1,0 +1,94 @@
+name: Deploy to Production
+on:
+  push:
+    branches: [ master ]
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Setup Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        components: rustfmt, clippy
+        
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: Cache cargo index
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: Cache cargo build
+      uses: actions/cache@v3
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: Build project
+      run: cargo build --release
+      
+    - name: Debug Secrets
+      run: |
+        if [ -n "${{ secrets.SSH_PRIVATE_KEY }}" ]; then
+          echo "SSH_PRIVATE_KEY is set"
+        else
+          echo "SSH_PRIVATE_KEY is not set"
+        fi
+        
+        if [ -n "${{ secrets.SERVER_USERNAME }}" ]; then
+          echo "SERVER_USERNAME is set"
+        else
+          echo "SERVER_USERNAME is not set"
+        fi
+      
+    - name: Setup SSH
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        
+        # Add known hosts
+        ssh-keyscan -p 8190 -H 45.45.239.125 >> ~/.ssh/known_hosts
+        
+        # Create SSH config
+        echo "Host deployment-server" > ~/.ssh/config
+        echo "    HostName 45.45.239.125" >> ~/.ssh/config
+        echo "    Port 8190" >> ~/.ssh/config
+        echo "    User ${{ secrets.SERVER_USERNAME }}" >> ~/.ssh/config
+        echo "    IdentityFile ~/.ssh/id_rsa" >> ~/.ssh/config
+        echo "    StrictHostKeyChecking yes" >> ~/.ssh/config
+        
+    - name: Deploy with SSH
+      run: |
+        # Test SSH connection
+        ssh deployment-server "echo SSH connection successful"
+        
+        # Create remote directory
+        ssh deployment-server "mkdir -p /home/website/agelbub"
+        
+        # Stop the service if it's running (adjust service name as needed)
+        ssh deployment-server "sudo systemctl stop agelbub || true"
+        
+        # Backup current version
+        ssh deployment-server "cp /home/website/agelbub/target/release/* /home/website/agelbub/backup/ 2>/dev/null || true"
+        
+        # Copy entire project (including source code for future builds)
+        scp -r * deployment-server:/home/website/agelbub/
+        
+        # Set permissions
+        ssh deployment-server "chmod +x /home/website/agelbub/target/release/* || true"
+        ssh deployment-server "chown -R website:website /home/website/agelbub"
+        
+        # Start the service if it exists (adjust service name as needed)
+        ssh deployment-server "sudo systemctl start agelbub || true"

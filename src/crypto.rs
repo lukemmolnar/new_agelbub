@@ -48,6 +48,15 @@ pub struct CryptoManager {
     rng: SystemRandom,
 }
 
+impl std::fmt::Debug for CryptoManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CryptoManager")
+            .field("master_key", &"[REDACTED]")
+            .field("rng", &"SystemRandom")
+            .finish()
+    }
+}
+
 impl CryptoManager {
     pub fn new(master_password: &str) -> Result<Self, CryptoError> {
         // Derive a key from the master password (in production, use proper key derivation)

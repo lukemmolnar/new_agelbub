@@ -36,6 +36,7 @@ pub struct Balance {
     pub last_updated: DateTime<Utc>,
 }
 
+#[derive(Debug)]
 pub struct Database {
     pool: SqlitePool,
 }

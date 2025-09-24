@@ -13,9 +13,72 @@ use crypto::CryptoManager;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
+#[derive(Debug)]
 pub struct Data {
     database: Database,
     crypto: CryptoManager,
+}
+
+/// Check if user is an admin (bot owner, has admin role, or has ADMINISTRATOR permission)
+async fn is_admin(ctx: Context<'_>) -> Result<bool, Error> {
+    let user_id = ctx.author().id;
+    
+    // Check if user is bot application owner
+    if let Ok(app_info) = ctx.http().get_current_application_info().await {
+        if let Some(owner) = &app_info.owner {
+            if owner.id == user_id {
+                return Ok(true);
+            }
+        }
+    }
+    
+    // Check if we're in a guild (server)
+    if let Some(guild_id) = ctx.guild_id() {
+        // Check if user has ADMINISTRATOR permission
+        if let Some(member) = ctx.author_member().await {
+            if let Ok(perms) = member.permissions(&ctx.cache()) {
+                if perms.administrator() {
+                    return Ok(true);
+                }
+            }
+        }
+        
+        // Check for admin role (configurable via environment variable)
+        let admin_role_name = env::var("ADMIN_ROLE_NAME")
+            .unwrap_or_else(|_| "Currency Admin".to_string());
+            
+        if let Ok(guild) = guild_id.to_partial_guild(&ctx.http()).await {
+            if let Ok(member) = guild.member(&ctx.http(), user_id).await {
+                for role_id in &member.roles {
+                    if let Some(role) = guild.roles.get(role_id) {
+                        if role.name == admin_role_name {
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok(false)
+}
+
+/// Check if user can register others (stricter admin check)
+async fn can_register_others(ctx: Context<'_>) -> Result<bool, Error> {
+    // For now, same as admin check, but could be made more restrictive
+    is_admin(ctx).await
+}
+
+#[poise::command(slash_command, prefix_command)]
+async fn test(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.say("Bot is working!").await?;
+    Ok(())
+}
+
+#[poise::command(slash_command, prefix_command)]
+async fn ping(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.say("Pong!").await?;
+    Ok(())
 }
 
 #[poise::command(slash_command)]
@@ -26,11 +89,10 @@ async fn register(
     let data = &ctx.data();
     let (target_user, is_registering_other) = match user {
         Some(mentioned_user) => {
-            // TODO: Replace with actual admin check
-            let is_admin = true;
-            
-            if !is_admin {
-                ctx.say("You don't have permission to register other users.").await?;
+            // Check if user has permission to register others
+            if !can_register_others(ctx).await? {
+                ctx.say("❌ You don't have permission to register other users.\n\
+                        **Required:** Bot owner, Administrator permission, or 'Currency Admin' role").await?;
                 return Ok(());
             }
             (mentioned_user, true)
@@ -145,12 +207,22 @@ async fn give(
     #[description = "Amount of coins to give"] amount: i64,
 ) -> Result<(), Error> {
     let data = &ctx.data();
-    
-    // TODO: Replace with actual admin check
-    let is_admin = true;
-    
-    if !is_admin {
-        ctx.say("You don't have permission to give coins.").await?;
+
+    // Check if user has admin permissions
+    if !is_admin(ctx).await? {
+        let admin_role_name = env::var("ADMIN_ROLE_NAME")
+            .unwrap_or_else(|_| "Currency Admin".to_string());
+        let response = format!(
+            "❌ **Access Denied**\n\
+            You don't have permission to use this command.\n\
+            \n\
+            **Required permissions (any of the following):**\n\
+            • Bot application owner\n\
+            • Discord Administrator permission\n\
+            • '{}' role",
+            admin_role_name
+        );
+        ctx.say(response).await?;
         return Ok(());
     }
 
@@ -259,11 +331,43 @@ async fn main() {
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![register(), balance(), give(), info()],
+            commands: vec![test(), ping(), register(), balance(), give(), info()],
             prefix_options: poise::PrefixFrameworkOptions {
                 prefix: Some("!".into()),
                 ..Default::default()
             },
+            on_error: |error| Box::pin(async move {
+                match error {
+                    poise::FrameworkError::Command { error, ctx, .. } => {
+                        error!("Error in command '{}': {}", ctx.command().name, error);
+                    }
+                    poise::FrameworkError::CommandCheckFailed { error, ctx, .. } => {
+                        if let Some(error) = error {
+                            error!("Command check failed for '{}': {}", ctx.command().name, error);
+                        } else {
+                            // This is a permission check failure - send a user-friendly message
+                            let admin_role_name = std::env::var("ADMIN_ROLE_NAME")
+                                .unwrap_or_else(|_| "Currency Admin".to_string());
+                            let response = format!(
+                                "❌ **Access Denied**\n\
+                                You don't have permission to use this command.\n\
+                                \n\
+                                **Required permissions (any of the following):**\n\
+                                • Bot application owner\n\
+                                • Discord Administrator permission\n\
+                                • '{}' role",
+                                admin_role_name
+                            );
+                            if let Err(e) = ctx.say(response).await {
+                                error!("Failed to send permission denied message: {}", e);
+                            }
+                        }
+                    }
+                    error => {
+                        error!("Framework error: {:?}", error);
+                    }
+                }
+            }),
             ..Default::default()
         })
         .setup(|ctx, _ready, framework| {

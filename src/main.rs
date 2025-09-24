@@ -226,11 +226,6 @@ async fn give(
         return Ok(());
     }
 
-    if amount <= 0 {
-        ctx.say("Amount must be positive.").await?;
-        return Ok(());
-    }
-
     let to_user_id = user.id.to_string();
     let from_user_id = "SYSTEM".to_string();
 
@@ -349,12 +344,10 @@ async fn main() {
                             let admin_role_name = std::env::var("ADMIN_ROLE_NAME")
                                 .unwrap_or_else(|_| "Currency Admin".to_string());
                             let response = format!(
-                                "❌ **Access Denied**\n\
+                                "
                                 You don't have permission to use this command.\n\
                                 \n\
                                 **Required permissions (any of the following):**\n\
-                                • Bot application owner\n\
-                                • Discord Administrator permission\n\
                                 • '{}' role",
                                 admin_role_name
                             );

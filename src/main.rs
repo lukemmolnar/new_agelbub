@@ -92,7 +92,7 @@ async fn register(
             // Check if user has permission to register others
             if !can_register_others(ctx).await? {
                 ctx.say("You don't have permission to register other users.\n\
-                        **Required:** Bot owner, Administrator permission, or 'Currency Admin' role").await?;
+                        ").await?;
                 return Ok(());
             }
             (mentioned_user, true)

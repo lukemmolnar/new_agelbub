@@ -65,12 +65,10 @@ async fn main() {
                         } else {
                             // This is a permission check failure - send a user-friendly message
                             let admin_role_name = std::env::var("ADMIN_ROLE_NAME")
-                                .unwrap_or_else(|_| "Currency Admin".to_string());
+                                .unwrap_or_else(|_| "Slumbanker".to_string());
                             let response = format!(
                                 "
-                                You don't have permission to use this command.\n\
-                                \n\
-                                **Required permissions (any of the following):**\n\
+                                Required permissions:\n\
                                 • '{}' role",
                                 admin_role_name
                             );
@@ -88,7 +86,11 @@ async fn main() {
         })
         .setup(|ctx, _ready, framework| {
             Box::pin(async move {
-                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                let guild_id = serenity::GuildId::new(1078723086448349365);
+                poise::builtins::register_in_guild(ctx, &framework.options().commands, guild_id).await?;
+                                
+                info!("registered commands to Slumfields {}", guild_id);
+                
                 Ok(Data { database, crypto })
             })
         })
@@ -100,7 +102,7 @@ async fn main() {
         .framework(framework)
         .await;
 
-    info!("Starting bot...");
+    info!("Agelbub online");
 
     client.unwrap().start().await.unwrap();
 }

@@ -5,6 +5,8 @@ use tracing::{error, info};
 mod database;
 mod crypto;
 mod commands;
+mod funny;
+mod auction;
 
 use database::Database;
 use crypto::CryptoManager;
@@ -21,26 +23,20 @@ pub struct Data {
 
 #[tokio::main]
 async fn main() {
-    // Load environment variables from .env file
     dotenv::dotenv().ok();
 
-    // Initialize the logger
     tracing_subscriber::fmt::init();
 
-    // Get the Discord token from environment
     let token = env::var("DISCORD_TOKEN")
         .expect("Expected DISCORD_TOKEN in environment");
 
-    // Get database URL from environment or use default
     let database_url = env::var("DATABASE_URL")
         .unwrap_or_else(|_| "sqlite:currency.db".to_string());
 
-    // Initialize database
     let database = Database::new(&database_url)
         .await
         .expect("Failed to connect to database");
 
-    // Initialize crypto manager
     let crypto_key = env::var("CRYPTO_MASTER_KEY")
         .unwrap_or_else(|_| "default_dev_key_change_in_production".to_string());
 
@@ -54,6 +50,20 @@ async fn main() {
                 prefix: Some("!".into()),
                 ..Default::default()
             },
+            event_handler: |ctx, event, _framework, _data| {
+                Box::pin(async move {
+                    match event {
+                        poise::serenity_prelude::FullEvent::Message { new_message } => {
+                            // Ignore bot messages to prevent loops
+                            if !new_message.author.bot {
+                                funny::handle_slumduke_messages(ctx, new_message).await;
+                            }
+                        }
+                        _ => {}
+                    }
+                    Ok(())
+                })
+            },
             on_error: |error| Box::pin(async move {
                 match error {
                     poise::FrameworkError::Command { error, ctx, .. } => {
@@ -63,7 +73,6 @@ async fn main() {
                         if let Some(error) = error {
                             error!("Command check failed for '{}': {}", ctx.command().name, error);
                         } else {
-                            // This is a permission check failure - send a user-friendly message
                             let admin_role_name = std::env::var("ADMIN_ROLE_NAME")
                                 .unwrap_or_else(|_| "Slumbanker".to_string());
                             let response = format!(

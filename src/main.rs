@@ -10,6 +10,7 @@ mod auction;
 
 use database::Database;
 use crypto::CryptoManager;
+use auction::AuctionManager;
 use commands::*;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -19,6 +20,7 @@ type Context<'a> = poise::Context<'a, Data, Error>;
 pub struct Data {
     database: Database,
     crypto: CryptoManager,
+    auction_manager: AuctionManager
 }
 
 #[tokio::main]
@@ -43,6 +45,8 @@ async fn main() {
     let crypto = CryptoManager::new(&crypto_key)
         .expect("Failed to initialize crypto manager");
 
+    let auction_manager = AuctionManager::new();
+
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: vec![register(), balance(), give(), baltop()],
@@ -54,7 +58,7 @@ async fn main() {
                 Box::pin(async move {
                     match event {
                         poise::serenity_prelude::FullEvent::Message { new_message } => {
-                            // Ignore bot messages to prevent loops
+                            // ignore agelbub messages to prevent loops
                             if !new_message.author.bot {
                                 funny::handle_slumduke_messages(ctx, new_message).await;
                             }
@@ -100,12 +104,15 @@ async fn main() {
                                 
                 info!("registered commands to Slumfields {}", guild_id);
                 
-                Ok(Data { database, crypto })
+                Ok(Data { database, crypto, auction_manager })
             })
         })
         .build();
 
-    let intents = serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
+    let intents = serenity::GatewayIntents::non_privileged() 
+        | serenity::GatewayIntents::MESSAGE_CONTENT
+        | serenity::GatewayIntents::GUILDS           
+        | serenity::GatewayIntents::GUILD_VOICE_STATES;
 
     let client = serenity::ClientBuilder::new(token, intents)
         .framework(framework)

@@ -2,6 +2,7 @@
 use poise::serenity_prelude as serenity;
 use tracing::error;
 use chrono::Utc;
+use std::collections::HashMap;
 use tokio::time::{sleep, Duration as TokioDuration};
 
 use crate::{Context, Error, database::User};
@@ -171,7 +172,7 @@ pub async fn baltop(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command, subcommands("start", "vote", "status", "end"))]
+#[poise::command(slash_command, subcommands("bid_start", "bid_vote", "bid_status", "bid_end"))]
 pub async fn bid(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }

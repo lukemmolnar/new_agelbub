@@ -126,16 +126,111 @@ pub async fn balance(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-// #[poise::command(slash_command)]
-// pub async fn send(ctx: Context<'_>) -> Result<(), Error> {
-//     let data = &ctx.data();
-//     let from_user = ctx.author().id.to_string();
-//     let to_user = user.id.to_string();
+#[poise::command(slash_command)]
+pub async fn send(
+    ctx: Context<'_>,
+    #[description = "User to send coins to"] user: serenity::User,
+    #[description = "Amount of coins to send"] amount: i64,
+) -> Result<(), Error> {
+    let data = &ctx.data();
+    let from_user_id = ctx.author().id.to_string();
+    let to_user_id = user.id.to_string();
 
-//     if from_user == to_user {
-//         ctx.say("?").await?;
-//         return Ok(());
-// }
+    // Can't send to yourself
+    if from_user_id == to_user_id {
+        ctx.say("why?").await?;
+        return Ok(());
+    }
+
+    // Can't send to bots
+    if user.bot {
+        ctx.say("You can't send Slumcoins to bots.").await?;
+        return Ok(());
+    }
+
+    // Validate amount
+    if amount <= 0 {
+        ctx.say("nice try bub").await?;
+        return Ok(());
+    }
+
+    // Check if sender is registered
+    match data.database.get_user(&from_user_id).await {
+        Ok(Some(_)) => {
+            match data.database.get_user(&to_user_id).await {
+                Ok(Some(_)) => {
+                    match data.database.get_balance(&from_user_id).await {
+                        Ok(sender_balance) => {
+                            if sender_balance < amount {
+                                ctx.say(format!(
+                                    "UR BROKE BUB! You have {} Slumcoins",
+                                    sender_balance
+                                )).await?;
+                                return Ok(());
+                            }
+
+                            match data.database.get_balance(&to_user_id).await {
+                                Ok(recipient_balance) => {
+                                    let new_sender_balance = sender_balance - amount;
+                                    let new_recipient_balance = recipient_balance + amount;
+
+                                    // Update both balances
+                                    match data.database.update_balance(&from_user_id, new_sender_balance).await {
+                                        Ok(()) => {
+                                            match data.database.update_balance(&to_user_id, new_recipient_balance).await {
+                                                Ok(()) => {
+                                                    ctx.say(format!(
+                                                        "sent **{} Slumcoins** to <@{}>\n\
+                                                         new balance: {} Slumcoins",
+                                                        amount, user.id, new_sender_balance
+                                                    )).await?;
+                                                }
+                                                Err(e) => {
+                                                    error!("Error updating recipient balance: {}", e);
+                                                    // Rollback sender balance
+                                                    let _ = data.database.update_balance(&from_user_id, sender_balance).await;
+                                                    ctx.say("Transfer failed. Please try again.").await?;
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Error updating sender balance: {}", e);
+                                            ctx.say("Transfer failed. Please try again.").await?;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Error getting recipient balance: {}", e);
+                                    ctx.say("Error retrieving recipient balance.").await?;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Error getting sender balance: {}", e);
+                            ctx.say("Error retrieving your balance.").await?;
+                        }
+                    }
+                }
+                Ok(None) => {
+                    ctx.say(format!("<@{}> is not registered. They need to use `/register` first.", user.id)).await?;
+                }
+                Err(e) => {
+                    error!("Database error checking recipient: {}", e);
+                    ctx.say("Database error occurred.").await?;
+                }
+            }
+        }
+        Ok(None) => {
+            ctx.say("You're not registered! Use `/register` first.").await?;
+        }
+        Err(e) => {
+            error!("Database error checking sender: {}", e);
+            ctx.say("Database error occurred.").await?;
+        }
+    }
+
+    Ok(())
+}
 
 #[poise::command(slash_command)]
 pub async fn baltop(ctx: Context<'_>) -> Result<(), Error> {
@@ -235,12 +330,12 @@ pub async fn bid_place(
                     match data.auction_manager.place_bid(voice_channel_id, ctx.author().id, amount).await {
                         Ok(()) => {
                             ctx.say(format!(
-                                "bid placed for **{} Slumcoins**!\nUse `/bid status` to see current standings.",
+                                "bid placed for **{} Slumcoins**\nUse `/bid status` to see current standings.",
                                 amount
                             )).await?;
                         }
                         Err(e) => {
-                            ctx.say(format!("❌ {}", e)).await?;
+                            ctx.say(format!(" {}", e)).await?;
                         }
                     }
                 }
@@ -392,7 +487,7 @@ pub async fn bid_status(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = match ctx.guild_id() {
         Some(id) => id,
         None => {
-            ctx.say("This command can only be used in a server!").await?;
+            ctx.say("This command can only be used in a server").await?;
             return Ok(());
         }
     };
@@ -472,7 +567,7 @@ pub async fn bid_end(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = match ctx.guild_id() {
         Some(id) => id,
         None => {
-            ctx.say("This command can only be used in a server!").await?;
+            ctx.say("This command can only be used in a server").await?;
             return Ok(());
         }
     };
@@ -491,7 +586,7 @@ pub async fn bid_end(ctx: Context<'_>) -> Result<(), Error> {
     let voice_channel_id = match voice_channel_id {
         Some(id) => id,
         None => {
-            ctx.say("You must be in a voice channel to end an auction!").await?;
+            ctx.say("You must be in a voice channel to end an auction").await?;
             return Ok(());
         }
     };
@@ -534,7 +629,7 @@ pub async fn bid_end(ctx: Context<'_>) -> Result<(), Error> {
             }
         }
         None => {
-            ctx.say("No active auction in this voice channel!").await?;
+            ctx.say("No active auction in this voice channel").await?;
         }
     }
 

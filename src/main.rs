@@ -49,7 +49,7 @@ async fn main() {
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![register(), balance(), give(), baltop(), bid()],
+            commands: vec![register(), balance(), give(), baltop(), bid(), send()],
             prefix_options: poise::PrefixFrameworkOptions {
                 prefix: Some("!".into()),
                 ..Default::default()

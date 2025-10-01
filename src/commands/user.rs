@@ -327,8 +327,7 @@ pub async fn bid_start(ctx: Context<'_>) -> Result<(), Error> {
             };
 
             ctx.say(format!(
-                "
-                {} has started a bidding war\n\n\
+                "{} has started a bidding war\n\n\
                 {}\n\n\
                 place bids using `/bid place [amount]`\n\
                 Auction ends in **2 minutes** (extends by 15s on new bids)\n\
@@ -337,8 +336,9 @@ pub async fn bid_start(ctx: Context<'_>) -> Result<(), Error> {
                 mentions
             )).await?;
 
-            // Spawn a task to auto-end the auction
+            // Clone the data we need before spawning the task
             let auction_manager = data.auction_manager.clone();
+            let database = data.database.clone();
             let ctx_clone = ctx.serenity_context().clone();
             let channel_id = ctx.channel_id();
             
@@ -346,37 +346,40 @@ pub async fn bid_start(ctx: Context<'_>) -> Result<(), Error> {
                 // Wait for the auction to expire
                 sleep(TokioDuration::from_secs(120)).await;
                 
-                        // Check and handle expired auction
-                        if let Some(auction) = auction_manager.get_auction(voice_channel_id).await {
-                            if auction.is_expired() {
-                                if let Some(ended_auction) = auction_manager.end_auction(voice_channel_id).await {
+                // Check and handle expired auction
+                if let Some(auction) = auction_manager.get_auction(voice_channel_id).await {
+                    if auction.is_expired() {
+                        if let Some(ended_auction) = auction_manager.end_auction(voice_channel_id).await {
+                            match auction_manager.process_auction_completion(&ended_auction, &database).await {
+                                Ok(()) => {
                                     // Process coin deduction
                                     let message = match ended_auction.get_winner() {
                                         Some((winner_id, winning_amount)) => {
-                                            // Try to process the auction completion (coin deduction)
-                                            // Note: We don't have database access in this spawned task context
-                                            // This is a limitation - in a real implementation you'd pass database reference or handle this differently
                                             format!(
-                                                "
-                                                Winner: <@{}>\n\
+                                                "Winner: <@{}>\n\
                                                 Winning bid: **{} Slumcoins**\n\
-                                                Hope it was worth it bub
-                                                ",
+                                                Hope it was worth it bub",
                                                 winner_id,
                                                 winning_amount
                                             )
                                         }
                                         None => "Auction ended with no bids".to_string(),
                                     };
-                                    
                                     let _ = channel_id.say(&ctx_clone.http, message).await;
+                                }
+                                Err(e) => {
+                                    // Log the error instead of using ctx.say
+                                    eprintln!("Error processing auction: {}", e);
+                                    let _ = channel_id.say(&ctx_clone.http, format!("Error processing auction: {}", e)).await;
                                 }
                             }
                         }
+                    }
+                }
             });
         }
         Err(e) => {
-            ctx.say(format!(" {}", e)).await?;
+            ctx.say(format!("{}", e)).await?;
         }
     }
 

@@ -3,8 +3,10 @@ use poise::serenity_prelude as serenity;
 use tracing::error;
 use chrono::Utc;
 use tokio::time::{sleep, Duration as TokioDuration};
+use uuid::Uuid;
 
 use crate::{Context, Error, database::User};
+use crate::database::Transaction;
 use super::can_register_others;
 
 #[poise::command(slash_command)]
@@ -15,7 +17,6 @@ pub async fn register(
     let data = &ctx.data();
     let (target_user, is_registering_other) = match user {
         Some(mentioned_user) => {
-            // Check if user has permission to register others
             if !can_register_others(ctx).await? {
                 ctx.say("You don't have permission to register other users.\n\
                         **Required:** Bot owner, Administrator permission, or 'Currency Admin' role").await?;
@@ -132,6 +133,8 @@ pub async fn send(
     #[description = "User to send coins to"] user: serenity::User,
     #[description = "Amount of coins to send"] amount: i64,
 ) -> Result<(), Error> {
+
+    
     let data = &ctx.data();
     let from_user_id = ctx.author().id.to_string();
     let to_user_id = user.id.to_string();
@@ -179,6 +182,24 @@ pub async fn send(
                                         Ok(()) => {
                                             match data.database.update_balance(&to_user_id, new_recipient_balance).await {
                                                 Ok(()) => {
+                                                    // Log the transaction
+                                                    let transaction = Transaction {
+                                                        id: Uuid::new_v4().to_string(),
+                                                        from_user: from_user_id.clone(),
+                                                        to_user: to_user_id.clone(),
+                                                        amount,
+                                                        transaction_type: "transfer".to_string(),
+                                                        message: Some(format!("Sent by {}", ctx.author().name)),
+                                                        nonce: 0,
+                                                        signature: String::new(),
+                                                        timestamp_unix: Utc::now().timestamp(),
+                                                        created_at: Utc::now(),
+                                                    };
+
+                                                    if let Err(e) = data.database.add_transaction(&transaction).await {
+                                                        error!("Failed to log transaction: {}", e);
+                                                    }
+
                                                     ctx.say(format!(
                                                         "sent **{} Slumcoins** to <@{}>\n\
                                                          new balance: {} Slumcoins",
@@ -260,6 +281,78 @@ pub async fn baltop(ctx: Context<'_>) -> Result<(), Error> {
         Err(e) => {
             error!("Error getting leaderboard: {}", e);
             ctx.say("Error retrieving leaderboard. Please try again.").await?;
+        }
+    }
+
+    Ok(())
+}
+
+#[poise::command(slash_command)]
+pub async fn ledger(
+    ctx: Context<'_>,
+    #[description = "Number of recent transactions to show (default: 10)"] limit: Option<usize>,
+) -> Result<(), Error> {
+    let data = &ctx.data();
+    let user_id = ctx.author().id.to_string();
+
+    match data.database.get_user(&user_id).await {
+        Ok(Some(_)) => {
+            match data.database.get_user_transactions(&user_id).await {
+                Ok(transactions) => {
+                    if transactions.is_empty() {
+                        ctx.say("No transactions found in your history.").await?;
+                        return Ok(());
+                    }
+
+                    let limit = limit.unwrap_or(10).min(25);
+                    let display_transactions: Vec<_> = transactions.iter().take(limit).collect();
+
+                    let mut response = format!(
+                        "**Transaction History** (showing {} most recent)\n\n",
+                        display_transactions.len()
+                    );
+
+                    for (i, tx) in display_transactions.iter().enumerate() {
+                        let is_incoming = tx.to_user == user_id;
+                        let other_user = if is_incoming { &tx.from_user } else { &tx.to_user };
+                        
+                        let emoji = if is_incoming { "📥" } else { "📤" };
+                        let direction = if is_incoming { "+" } else { "-" };
+                        let action = if is_incoming { "from" } else { "to" };
+                        
+                        response.push_str(&format!(
+                            "{}. {} **{}{} coins** {} <@{}>\n",
+                            i + 1, emoji, direction, tx.amount, action, other_user
+                        ));
+
+                        if let Some(msg) = &tx.message {
+                            response.push_str(&format!("   *\"{}\"*\n", msg));
+                        }
+
+                        response.push_str(&format!("   <t:{}:R>\n\n", tx.timestamp_unix));
+                    }
+
+                    if transactions.len() > limit {
+                        response.push_str(&format!(
+                            "*{} more transaction(s) not shown*",
+                            transactions.len() - limit
+                        ));
+                    }
+
+                    ctx.say(response).await?;
+                }
+                Err(e) => {
+                    error!("Error getting transactions: {}", e);
+                    ctx.say("Error retrieving transaction history.").await?;
+                }
+            }
+        }
+        Ok(None) => {
+            ctx.say("You're not registered! Use `/register` first.").await?;
+        }
+        Err(e) => {
+            error!("Database error: {}", e);
+            ctx.say("Database error occurred.").await?;
         }
     }
 

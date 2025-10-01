@@ -171,23 +171,16 @@ pub async fn baltop(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command, subcommands("bid_start", "bid_status", "bid_end"))]
-pub async fn bid(
-    ctx: Context<'_>,
-    #[description = "Amount of Slumcoins to bid"] amount: Option<i64>,
-) -> Result<(), Error> {
-    // If amount is provided, treat this as a bid placement
-    if let Some(bid_amount) = amount {
-        return place_bid(ctx, bid_amount).await;
-    }
-    
-    // If no amount provided, show help
-    ctx.say("Use `/bid start` to start an auction, `/bid [amount]` to place a bid, or `/bid status` to check current bids.").await?;
+#[poise::command(slash_command, subcommands("bid_start", "bid_place", "bid_status", "bid_end"))]
+pub async fn bid(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-// Helper function for placing bids
-async fn place_bid(ctx: Context<'_>, amount: i64) -> Result<(), Error> {
+#[poise::command(slash_command, rename = "place")]
+pub async fn bid_place(
+    ctx: Context<'_>,
+    #[description = "Amount of Slumcoins to bid"] amount: i64,
+) -> Result<(), Error> {
     let guild_id = match ctx.guild_id() {
         Some(id) => id,
         None => {
@@ -337,7 +330,7 @@ pub async fn bid_start(ctx: Context<'_>) -> Result<(), Error> {
                 "
                 {} has started a bidding war\n\n\
                 {}\n\n\
-                place  bids using `/bid [amount]`\n\
+                place bids using `/bid place [amount]`\n\
                 Auction ends in **2 minutes** (extends by 15s on new bids)\n\
                 Use `/bid status` to check current highest bid",
                 ctx.author().name,
@@ -364,10 +357,11 @@ pub async fn bid_start(ctx: Context<'_>) -> Result<(), Error> {
                                             // Note: We don't have database access in this spawned task context
                                             // This is a limitation - in a real implementation you'd pass database reference or handle this differently
                                             format!(
-                                                "🏆 **Auction Ended!**\n\
+                                                "
                                                 Winner: <@{}>\n\
                                                 Winning bid: **{} Slumcoins**\n\
-                                                Note: Please use `/balance` to verify your updated balance.",
+                                                Hope it was worth it bub
+                                                ",
                                                 winner_id,
                                                 winning_amount
                                             )
@@ -382,7 +376,7 @@ pub async fn bid_start(ctx: Context<'_>) -> Result<(), Error> {
             });
         }
         Err(e) => {
-            ctx.say(format!("❌ {}", e)).await?;
+            ctx.say(format!(" {}", e)).await?;
         }
     }
 
@@ -424,21 +418,21 @@ pub async fn bid_status(ctx: Context<'_>) -> Result<(), Error> {
     match data.auction_manager.get_auction(voice_channel_id).await {
         Some(auction) => {
             if auction.is_expired() {
-                ctx.say("The auction in this voice channel has ended!").await?;
+                ctx.say("The auction in this voice channel has ended").await?;
                 return Ok(());
             }
 
             let highest_bid = auction.get_highest_bid_amount();
             let mut response = format!(
-                "💰 **Current Auction Status**\n\
-                ⏱️ Time remaining: **{}s**\n\
-                📊 Total bids: **{}**\n\n",
+                "
+                Time remaining: **{}s**\n\
+                Total bids: **{}**\n\n",
                 auction.time_remaining(),
                 auction.bids.len()
             );
 
             if auction.bids.is_empty() {
-                response.push_str("No bids yet! Use `/bid [amount]` to place a bid.");
+                response.push_str("No bids yet. Use `/bid place [amount]` to place a bid.");
             } else {
                 if let Some((winner_id, winning_amount)) = auction.get_winner() {
                     response.push_str(&format!(
@@ -505,7 +499,7 @@ pub async fn bid_end(ctx: Context<'_>) -> Result<(), Error> {
         Some(auction) => {
             // Only the creator can manually end the auction early
             if auction.creator_id != ctx.author().id {
-                ctx.say("Only the auction creator can end it early!").await?;
+                ctx.say("Only the auction creator can end it early").await?;
                 return Ok(());
             }
 
@@ -516,21 +510,22 @@ pub async fn bid_end(ctx: Context<'_>) -> Result<(), Error> {
                         let message = match ended_auction.get_winner() {
                             Some((winner_id, winning_amount)) => {
                                 format!(
-                                    "🏆 **Auction Ended Early!**\n\
+                                    "
                                     Winner: <@{}>\n\
                                     Winning bid: **{} Slumcoins**\n\
-                                    ✅ Coins have been deducted from your balance!",
+                                    Hope it was worth it bub
+                                    ",
                                     winner_id,
                                     winning_amount
                                 )
                             }
-                            None => "Auction ended with no bids!".to_string(),
+                            None => "Auction ended with no bids".to_string(),
                         };
                         
                         ctx.say(message).await?;
                     }
                     Err(e) => {
-                        ctx.say(format!("❌ Error processing auction: {}", e)).await?;
+                        ctx.say(format!("Error processing auction: {}", e)).await?;
                     }
                 }
             }
